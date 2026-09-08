@@ -4,53 +4,26 @@ set -e
 mkdir -p result
 
 if [ -f "main.go" ]; then
-    echo "正在编译 Go 测速程序..."
+    echo "正在编译仓库根目录的 Go 测速程序..."
     go build -o cf-speedtest main.go
     echo "开始执行 IP 优选测速..."
     ./cf-speedtest -t 200 -n 10 > result/raw_result.txt
 else
-    echo "未检测到 main.go，开始下载 XIU2/CloudflareSpeedTest 二进制文件..."
+    echo "未检测到本地 main.go，使用 go install 直接安装 XIU2/CloudflareSpeedTest 最新版..."
     
-    # 1. 尝试通过 GitHub API 自动抓取最新版本的 Tag 名
-    LATEST_TAG=$(curl -sSL "https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    # 彻底告别 404！直接拉取官方源码并在 Actions 中现场编译
+    go install github.com/XIU2/CloudflareSpeedTest@latest
     
-    # 2. 如果 API 被限流或失败，回退到指定的稳定 Tag
-    if [ -z "$LATEST_TAG" ]; then
-        LATEST_TAG="v2.2.5"
-    fi
-    
-    # 移除 Tag 中的 v 前缀（适应不同发布版本的命名格式）
-    VERSION_NUM="${LATEST_TAG#v}"
+    # GOBIN 默认在 ~/go/bin/CloudflareSpeedTest
+    SPEEDTEST_BIN="$(go env GOPATH)/bin/CloudflareSpeedTest"
 
-    echo "识别到版本 Tag: ${LATEST_TAG} (版本号: ${VERSION_NUM})"
-
-    # 构造可能的下载 URL 列表（处理带 v 和不带 v 的两种常见 Release 文件命名）
-    URLS=(
-        "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${LATEST_TAG}/CloudflareSpeedTest_linux_amd64.tar.gz"
-        "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${LATEST_TAG}/CloudflareSpeedTest_${VERSION_NUM}_linux_amd64.tar.gz"
-        "https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareSpeedTest_linux_amd64.tar.gz"
-    )
-
-    SUCCESS=0
-    for URL in "${URLS[@]}"; do
-        echo "尝试下载: $URL"
-        if curl -sSLf "$URL" -o speedtest.tar.gz; then
-            SUCCESS=1
-            break
-        fi
-    done
-
-    if [ $SUCCESS -ne 1 ]; then
-        echo "错误：所有下载链接均失败，请检查网络或 GitHub Release 状态！"
+    if [ ! -f "$SPEEDTEST_BIN" ]; then
+        echo "错误：CloudflareSpeedTest 编译安装失败！"
         exit 1
     fi
 
-    tar -zxvf speedtest.tar.gz CloudflareSpeedTest
-    rm -f speedtest.tar.gz
-    chmod +x CloudflareSpeedTest
-
-    echo "开始运行 CloudflareSpeedTest 测速..."
-    ./CloudflareSpeedTest -n 500 -pt 10 -o result/result.csv
+    echo "编译完成，开始运行 CloudflareSpeedTest 测速..."
+    "$SPEEDTEST_BIN" -n 500 -pt 10 -o result/result.csv
 fi
 
 # 2. 提取纯 IP 列表
