@@ -18,18 +18,15 @@ else
     # 2. 进入源码目录执行本地编译
     cd CloudflareSpeedTest_src
     go build -o ../CloudflareSpeedTest main.go
+    # 提取默认的 ip.txt 到工作目录
+    cp ip.txt ../ip.txt
     cd ..
     
     # 清理源码目录
     rm -rf CloudflareSpeedTest_src
 
-    echo "编译完成，开始运行 CloudflareSpeedTest 测速..."
-    # 修正后的参数：
-    # -n 500  : 500 个并发延迟测试线程
-    # -dn 10  : 对延迟最低的前 10 个 IP 进行下载测速
-    # -dt 5   : 每个 IP 下载测试 5 秒
-    # -tp 443 : 测速端口 443
-    # -o result/result.csv : 写入结果文件
+    echo "编译与数据初始化完成，开始运行 CloudflareSpeedTest 测速..."
+    # 运行测速
     ./CloudflareSpeedTest -n 500 -dn 10 -dt 5 -tp 443 -o result/result.csv
 fi
 
