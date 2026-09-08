@@ -12,8 +12,9 @@ RANDOM_DELAY=$((RANDOM % 30 + 1))
 echo "防风控提示: 随机等待 ${RANDOM_DELAY} 秒后启动任务..."
 sleep $RANDOM_DELAY
 
+
 # ==========================================
-# 🛠️ 2. 编译与扩展 IP 库 (关键：扩充全球 IP 段)
+# 🛠️ 2. 编译与获取大容量纯净 IP 库
 # ==========================================
 echo "=== [2/5] 获取/编译测速核心并下载扩展全球 IP 库 ==="
 
@@ -30,35 +31,38 @@ if [ ! -f "CloudflareSpeedTest" ]; then
     fi
 fi
 
-# 📥 扩充多来源全球 IP 库
-echo "正在获取多来源大容量 Cloudflare 全球 IP 库..."
-curl -sSL "https://www.cloudflare.com/ips-v4" -o extra_ips_1.txt || true
-curl -sSL "https://raw.githubusercontent.com/ip2location/ip2location-cloudflare-subnet/main/cloudflare-ipv4.txt" -o extra_ips_2.txt || true
+echo "正在获取多来源 Cloudflare 全球 IP 库..."
 
-# 合并所有 IP 段库并去重
-cat ip.txt extra_ips_1.txt extra_ips_2.txt 2>/dev/null | grep -E '^[0-9]' | sort -u > full_ip.txt
+# 1. 下载多个可用的 Cloudflare IP 段来源
+curl -sSL "https://www.cloudflare.com/ips-v4" -o extra_ips_1.txt || true
+curl -sSL "https://raw.githubusercontent.com/cf-m/cf-ips/main/ipv4.txt" -o extra_ips_2.txt || true
+
+# 2. 严苛正则过滤：只提取格式为 x.x.x.x/x 的合法 IPv4 CIDR 行，彻底杜绝 404 或 html 报错混入
+cat ip.txt extra_ips_1.txt extra_ips_2.txt 2>/dev/null \
+  | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$' \
+  | sort -u > full_ip.txt
+
 rm -f extra_ips_1.txt extra_ips_2.txt
 
-# 打散完整的 IP 库，确保获得极高多样性的全球节点
+# 3. 打散纯净的 IP 库
 shuf full_ip.txt > ip_shuffled.txt
 rm -f full_ip.txt
 
-echo "IP 库准备就绪，包含 $(wc -l < ip_shuffled.txt) 个可用 CIDR 网段。"
+VALID_COUNT=$(wc -l < ip_shuffled.txt)
+echo "IP 库清理验证完成！共解析出 ${VALID_COUNT} 个合法 CIDR 网段。"
 
 
 # ==========================================
-# 🚀 3. 大样本广域测速 (扩容量至 1200)
+# 🚀 3. 大样本广域打散测速
 # ==========================================
 echo "=== [3/5] 执行全球打散大样本测速 ==="
 
 PORT=443
 
-# -n 1200   : 进一步扩大并发抽取样本数
-# -dn 1200  : 下载测速前 1200 个 IP，保证覆盖足够多的小众国家/地区
 ./CloudflareSpeedTest \
   -f ip_shuffled.txt \
-  -n 1200 \
-  -dn 1200 \
+  -n 1000 \
+  -dn 1000 \
   -dt 2 \
   -tp $PORT \
   -url "https://speed.cloudflare.com/__down?bytes=10000000" \
@@ -140,7 +144,6 @@ if ip_list:
                     city_code = item.get('city', '').upper()
                     cc = item.get('countryCode', '').upper()
                     
-                    # 优先利用 Cloudflare 官方三字代码 (IATA) 进行精准匹配，保底使用 ip-api 返回的国家代码
                     resolved_cc = colo_to_country.get(city_code, cc)
                     if resolved_cc and len(resolved_cc) == 2 and resolved_cc.isalpha():
                         ip_geo_map[ip] = resolved_cc
