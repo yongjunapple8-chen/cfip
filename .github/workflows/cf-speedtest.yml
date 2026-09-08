@@ -1,0 +1,66 @@
+name: Cloudflare Auto SpeedTest & Update
+
+on:
+  # 支持 Cron 定时任务（每 6 小时自动运行一次，可按需修改）
+  schedule:
+    - cron: '0 */6 * * *'
+  # 支持手动在 GitHub 页面点击触发
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Cache Go Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run SpeedTest Script
+        run: |
+          chmod +x ./scripts/run.sh
+          ./scripts/run.sh
+
+      - name: Commit & Push Updated IPs
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add result/
+          if git diff --staged --quiet; then
+            echo "没有检测到 IP 变化，跳过 Commit。"
+          else
+            git commit -m "auto: update best cloudflare ips [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]"
+            git push
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './result'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
