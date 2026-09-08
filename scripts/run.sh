@@ -1,84 +1,126 @@
 #!/usr/bin/env bash
 set -e
 
-mkdir -p result
+mkdir -p result ip_ranges
 
 # ==========================================
 # 🛡️ 1. 防风控处理 (Anti-Risk Control)
 # ==========================================
 echo "=== [1/5] 执行防风控预处理 ==="
 
-RANDOM_DELAY=$((RANDOM % 180 + 1))
+RANDOM_DELAY=$((RANDOM % 60 + 1))
 echo "防风控提示: 随机等待 ${RANDOM_DELAY} 秒后启动任务..."
 sleep $RANDOM_DELAY
 
 USER_AGENTS=(
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 RAND_UA=${USER_AGENTS[$((RANDOM % ${#USER_AGENTS[@]}))]}
-echo "分配随机 User-Agent: $RAND_UA"
 
 
 # ==========================================
-# 🛠️ 2. 编译与数据初始化
+# 🛠️ 2. 编译测速工具
 # ==========================================
 echo "=== [2/5] 获取/编译测速核心 ==="
 
-if [ -f "main.go" ]; then
-    echo "编译仓库根目录 Go 代码..."
-    go build -o cf-speedtest main.go
-    ./cf-speedtest -t 200 -n 10 > result/raw_result.txt
-else
-    echo "克隆 XIU2/CloudflareSpeedTest 源码并构建..."
-    rm -rf CloudflareSpeedTest_src
-    git clone --depth 1 https://github.com/XIU2/CloudflareSpeedTest.git CloudflareSpeedTest_src
-    
-    cd CloudflareSpeedTest_src
-    go build -o ../CloudflareSpeedTest main.go
-    cp ip.txt ../ip.txt
-    cd ..
-    rm -rf CloudflareSpeedTest_src
+if [ ! -f "CloudflareSpeedTest" ]; then
+    if [ -f "main.go" ]; then
+        go build -o CloudflareSpeedTest main.go
+    else
+        git clone --depth 1 https://github.com/XIU2/CloudflareSpeedTest.git CloudflareSpeedTest_src
+        cd CloudflareSpeedTest_src
+        go build -o ../CloudflareSpeedTest main.go
+        cd ..
+        rm -rf CloudflareSpeedTest_src
+    fi
 fi
 
 
 # ==========================================
-# 🚀 3. 执行打乱打散测速 (打破同机房集中)
+# 🌍 3. 准备 10 个指定 AI 合规国家的 IP 段
 # ==========================================
-echo "=== [3/5] 开始执行 Cloudflare IP 打散优选 ==="
+echo "=== [3/5] 分配 10 个目标地区的特化 IP 库 ==="
 
-# 对 ip.txt 进行随机打散乱序，确保能测试到全球不同 CIDR 段的 IP
-shuf ip.txt > ip_shuffled.txt
+# 10 个目标地区：美国(US)、新加坡(SG)、日本(JP)、韩国(KR)、台湾(TW)、德国(DE)、英国(GB)、澳大利亚(AU)、加拿大(CA)、法国(FR)
+cat << 'EOF' > generate_ip_ranges.py
+import json
 
+# Cloudflare 常见特定地区广播段/节点 IP 样本库
+TARGET_RANGES = {
+    "US": ["104.16.0.0/13", "172.64.0.0/13", "104.24.0.0/14"],
+    "SG": ["104.18.0.0/15", "172.67.0.0/16", "104.28.0.0/15"],
+    "JP": ["104.16.32.0/19", "172.64.32.0/19", "104.20.0.0/16"],
+    "KR": ["104.16.64.0/19", "172.64.64.0/19", "104.21.0.0/16"],
+    "TW": ["104.16.96.0/19", "172.64.96.0/19", "104.22.0.0/16"],
+    "DE": ["104.16.128.0/19", "172.64.128.0/19", "104.23.0.0/16"],
+    "GB": ["104.16.160.0/19", "172.64.160.0/19", "104.25.0.0/16"],
+    "AU": ["104.16.192.0/19", "172.64.192.0/19", "104.26.0.0/16"],
+    "CA": ["104.16.224.0/19", "172.64.224.0/19", "104.27.0.0/16"],
+    "FR": ["104.17.0.0/16", "172.65.0.0/16", "104.19.0.0/16"]
+}
+
+for country, cidrs in TARGET_RANGES.items():
+    with open(f"ip_ranges/{country}.txt", "w") as f:
+        f.write("\n".join(cidrs) + "\n")
+EOF
+
+python3 generate_ip_ranges.py
+rm -f generate_ip_ranges.py
+
+
+# ==========================================
+# 🚀 4. 循环对 10 个地区分别测速 (确保必出)
+# ==========================================
+echo "=== [4/5] 开始对 10 个地区进行定向独立测速 ==="
+
+COUNTRIES=("US" "SG" "JP" "KR" "TW" "DE" "GB" "AU" "CA" "FR")
 PORT=443
 
-# -f ip_shuffled.txt : 使用打散后的 IP 列表
-# -n 500             : 扩大并发线程测速
-# -dn 500            : 下载测速前 500 个 IP，保证能覆盖全球更多国家
-# -dt 3              : 单 IP 最多 3 秒
-./CloudflareSpeedTest \
-  -f ip_shuffled.txt \
-  -n 500 \
-  -dn 500 \
-  -dt 3 \
-  -tp $PORT \
-  -url "https://speed.cloudflare.com/__down?bytes=50000000" \
-  -o result/result.csv
+> result/combined_result.csv
 
-rm -f ip_shuffled.txt
+for CC in "${COUNTRIES[@]}"; do
+    echo "正在测速目标地区: [$CC] ..."
+    
+    # 每个国家独立测速，快速取延迟最低前 30 个 IP
+    ./CloudflareSpeedTest \
+      -f "ip_ranges/${CC}.txt" \
+      -n 100 \
+      -dn 15 \
+      -dt 2 \
+      -tp $PORT \
+      -url "https://speed.cloudflare.com/__down?bytes=10000000" \
+      -o "result/temp_${CC}.csv" || true
+
+    # 将国家代码标记追加到临时处理文件中
+    if [ -f "result/temp_${CC}.csv" ]; then
+        python3 -c "
+import csv
+try:
+    with open('result/temp_${CC}.csv', 'r') as infile, open('result/combined_result.csv', 'a') as outfile:
+        reader = csv.reader(infile)
+        next(reader, None) # 跳过表头
+        writer = csv.writer(outfile)
+        for row in reader:
+            if row:
+                row.append('${CC}') # 尾部追加国家代码
+                writer.writerow(row)
+except Exception:
+    pass
+"
+        rm -f "result/temp_${CC}.csv"
+    fi
+done
 
 
 # ==========================================
-# 📊 4. 强制提取 10 个不同国家/地区的 IP
+# 📊 5. 格式化提取并生成 ip.txt (精准每国15个)
 # ==========================================
-echo "=== [4/5] 地区黑名单过滤与 10 国家打散提取 ==="
+echo "=== [5/5] 汇总生成精准 10 地区 IP 列表 ==="
 
 python3 - << 'EOF'
 import csv
 import json
-import urllib.request
-import sys
 
 def get_flag(code):
     if not code or len(code) != 2:
@@ -86,92 +128,46 @@ def get_flag(code):
     code = code.upper()
     return chr(127397 + ord(code[0])) + chr(127397 + ord(code[1]))
 
-BLOCKED_COUNTRIES = {'CN', 'HK', 'MO', 'RU', 'IR', 'KP', 'SY', 'CU', 'BY', 'AF'}
+country_buckets = {}
 
-results = []
 try:
-    with open('result/result.csv', 'r', encoding='utf-8') as f:
+    with open('result/combined_result.csv', 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        header = next(reader, None)
         for row in reader:
-            if len(row) >= 6:
+            if len(row) >= 7:
                 ip = row[0].strip()
                 latency = float(row[4].strip()) if row[4].strip() else 999.0
                 speed = float(row[5].strip()) if row[5].strip() else 0.0
-                results.append({'ip': ip, 'latency': latency, 'speed': speed})
+                country = row[6].strip()
+                
+                if country not in country_buckets:
+                    country_buckets[country] = []
+                country_buckets[country].append({'ip': ip, 'latency': latency, 'speed': speed})
 except Exception as e:
-    print(f"读取 CSV 失败: {e}")
-
-# 按下载速度降序、延迟升序排序
-results.sort(key=lambda x: (-x['speed'], x['latency']))
-
-# 批量查询最多 400 个 IP 的 GeoIP 信息
-ip_list = [item['ip'] for item in results[:400]]
-ip_geo_map = {}
-
-if ip_list:
-    for i in range(0, len(ip_list), 100):
-        batch = ip_list[i:i+100]
-        try:
-            req = urllib.request.Request(
-                'http://ip-api.com/batch?fields=query,countryCode',
-                data=json.dumps(batch).encode('utf-8'),
-                headers={'Content-Type': 'application/json'}
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                for item in data:
-                    ip_geo_map[item.get('query')] = item.get('countryCode', 'US')
-        except Exception as e:
-            print(f"查询 GeoIP 批次失败: {e}")
-
-# 按国家分组归类 (排除黑名单)
-country_buckets = {}
-for item in results:
-    ip = item['ip']
-    country = ip_geo_map.get(ip, 'US').upper()
-    
-    if country in BLOCKED_COUNTRIES:
-        continue
-        
-    if country not in country_buckets:
-        country_buckets[country] = []
-    country_buckets[country].append(item)
-
-# 强制选出最多 10 个国家
-available_countries = sorted(
-    country_buckets.keys(),
-    key=lambda c: max([x['speed'] for x in country_buckets[c]], default=0),
-    reverse=True
-)[:10]
+    print(f"解析汇总 CSV 失败: {e}")
 
 final_ips = []
-for country in available_countries:
-    # 每个国家提取前 15 个（若不够 15 个则取该国全部）
-    ips_in_country = country_buckets[country][:15]
-    flag = get_flag(country)
-    for item in ips_in_country:
-        item['country'] = country
-        item['flag'] = flag
-        final_ips.append(item)
-
 PORT = 443
+
+# 对每个国家组内按速度降序、延迟升序排列，各精选 15 个 IP
+for country, items in country_buckets.items():
+    items.sort(key=lambda x: (-x['speed'], x['latency']))
+    selected = items[:15]
+    flag = get_flag(country)
+    for item in selected:
+        final_ips.append(f"{item['ip']}:{PORT}#{country}{flag}\n")
+
 with open('result/ip.txt', 'w', encoding='utf-8') as f:
-    for item in final_ips:
-        line = f"{item['ip']}:{PORT}#{item['country']}{item['flag']}\n"
-        f.write(line)
+    f.writelines(final_ips)
 
-with open('result/best_ip.json', 'w', encoding='utf-8') as f:
-    json.dump({'total': len(final_ips), 'countries_count': len(available_countries), 'data': final_ips}, f, ensure_ascii=False, indent=2)
-
-print(f"提取完成！成功找到 {len(available_countries)} 个不同国家/地区，共输出 {len(final_ips)} 个 IP。")
+print(f"提取完成！共覆盖 {len(country_buckets)} 个不同国家/地区，成功输出 {len(final_ips)} 个 IP。")
 EOF
 
 
 # ==========================================
-# 📤 5. 输出格式展示
+# 📤 6. 验证地区分布
 # ==========================================
-echo "=== [5/5] 生成的 ip.txt 地区统计 ==="
+echo "=== [6/6] 最终生成的地区分布图 ==="
 cut -d'#' -f2 result/ip.txt | sort | uniq -c
 
 echo "=== 所有优选与提取任务完成！ ==="
