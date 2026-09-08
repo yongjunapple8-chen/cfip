@@ -4,33 +4,54 @@ set -e
 echo "=== 开始初始化优选环境 ==="
 mkdir -p result
 
-# 1. 编译运行根目录下的 Go 测速程序（如果使用的是开源的 CloudflareSpeedTest 二进制，亦可在此下载）
+# 1. 编译运行根目录下的 Go 测速程序
 if [ -f "main.go" ]; then
     echo "正在编译 Go 测速程序..."
     go build -o cf-speedtest main.go
     echo "开始执行 IP 优选测速..."
     ./cf-speedtest -t 200 -n 10 > result/raw_result.txt
 else
-    echo "未检测到 main.go，下载第三方开源二进制文件示例 (XIU2/CloudflareSpeedTest)..."
-    curl -sSL https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareSpeedTest_linux_amd64.tar.gz | tar -zxvf - CloudflareSpeedTest
+    echo "未检测到 main.go，开始下载 XIU2/CloudflareSpeedTest 二进制文件..."
+    
+    # 动态获取最新的 Release 版本下载地址（跟随 302 重定向 `-L`）
+    DOWNLOAD_URL=$(curl -s https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/latest | grep "browser_download_url.*CloudflareSpeedTest_linux_amd64.tar.gz" | cut -d '"' -f 4)
+    
+    # 如果 API 请求受限或未获取到，使用备用固定链接
+    if [ -z "$DOWNLOAD_URL" ]; then
+        DOWNLOAD_URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareSpeedTest_linux_amd64.tar.gz"
+    fi
+
+    echo "下载链接: $DOWNLOAD_URL"
+    
+    # 使用 -L 允许重定向，-f 在 404/500 时直接报错停止
+    curl -sSLf "$DOWNLOAD_URL" -o speedtest.tar.gz
+    
+    # 检查文件是否正常下载
+    if [ ! -s speedtest.tar.gz ]; then
+        echo "错误：下载的压缩包为空，请检查网络或 GitHub Release 链接！"
+        exit 1
+    fi
+
+    tar -zxvf speedtest.tar.gz CloudflareSpeedTest
+    rm -f speedtest.tar.gz
+    chmod +x CloudflareSpeedTest
+
+    echo "开始运行 CloudflareSpeedTest 测速..."
     ./CloudflareSpeedTest -n 500 -pt 10 -o result/result.csv
 fi
 
 # 2. 提取纯 IP 列表
 echo "正在提取最优 IP..."
 if [ -f "result/result.csv" ]; then
-    # 解析 CSV 文件的 IP 列（适配 XIU2 格式）
     awk -F',' 'NR>1 {print $1}' result/result.csv | head -n 10 > result/ip.txt
 elif [ -f "result/raw_result.txt" ]; then
-    # 提取输出格式中的 IP
     grep -E '([0-9]{1,3}\.){3}[0-9]{1,3}' result/raw_result.txt | head -n 10 > result/ip.txt
 fi
 
-# 3. 生成 Base64 格式简单订阅示例 (如 VLESS/VMess/Trojan 替换 IP)
+# 3. 生成配置与信息
 echo "正在生成订阅与节点文件..."
 BEST_IP=$(head -n 1 result/ip.txt || echo "104.16.1.1")
 
-# 示例：替换模版中的优选 IP，生成配置文件
 cat <<EOF > result/best_ip.json
 {
   "updated_at": "$(date -u +'%Y-%m-%d %H:%M:%S UTC')",
