@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== 开始初始化优选环境 ==="
 mkdir -p result
 
-# 1. 编译运行根目录下的 Go 测速程序
 if [ -f "main.go" ]; then
     echo "正在编译 Go 测速程序..."
     go build -o cf-speedtest main.go
@@ -13,22 +11,37 @@ if [ -f "main.go" ]; then
 else
     echo "未检测到 main.go，开始下载 XIU2/CloudflareSpeedTest 二进制文件..."
     
-    # 动态获取最新的 Release 版本下载地址（跟随 302 重定向 `-L`）
-    DOWNLOAD_URL=$(curl -s https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/latest | grep "browser_download_url.*CloudflareSpeedTest_linux_amd64.tar.gz" | cut -d '"' -f 4)
+    # 1. 尝试通过 GitHub API 自动抓取最新版本的 Tag 名
+    LATEST_TAG=$(curl -sSL "https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     
-    # 如果 API 请求受限或未获取到，使用备用固定链接
-    if [ -z "$DOWNLOAD_URL" ]; then
-        DOWNLOAD_URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareSpeedTest_linux_amd64.tar.gz"
+    # 2. 如果 API 被限流或失败，回退到指定的稳定 Tag
+    if [ -z "$LATEST_TAG" ]; then
+        LATEST_TAG="v2.2.5"
     fi
+    
+    # 移除 Tag 中的 v 前缀（适应不同发布版本的命名格式）
+    VERSION_NUM="${LATEST_TAG#v}"
 
-    echo "下载链接: $DOWNLOAD_URL"
-    
-    # 使用 -L 允许重定向，-f 在 404/500 时直接报错停止
-    curl -sSLf "$DOWNLOAD_URL" -o speedtest.tar.gz
-    
-    # 检查文件是否正常下载
-    if [ ! -s speedtest.tar.gz ]; then
-        echo "错误：下载的压缩包为空，请检查网络或 GitHub Release 链接！"
+    echo "识别到版本 Tag: ${LATEST_TAG} (版本号: ${VERSION_NUM})"
+
+    # 构造可能的下载 URL 列表（处理带 v 和不带 v 的两种常见 Release 文件命名）
+    URLS=(
+        "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${LATEST_TAG}/CloudflareSpeedTest_linux_amd64.tar.gz"
+        "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${LATEST_TAG}/CloudflareSpeedTest_${VERSION_NUM}_linux_amd64.tar.gz"
+        "https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareSpeedTest_linux_amd64.tar.gz"
+    )
+
+    SUCCESS=0
+    for URL in "${URLS[@]}"; do
+        echo "尝试下载: $URL"
+        if curl -sSLf "$URL" -o speedtest.tar.gz; then
+            SUCCESS=1
+            break
+        fi
+    done
+
+    if [ $SUCCESS -ne 1 ]; then
+        echo "错误：所有下载链接均失败，请检查网络或 GitHub Release 状态！"
         exit 1
     fi
 
@@ -48,7 +61,7 @@ elif [ -f "result/raw_result.txt" ]; then
     grep -E '([0-9]{1,3}\.){3}[0-9]{1,3}' result/raw_result.txt | head -n 10 > result/ip.txt
 fi
 
-# 3. 生成配置与信息
+# 3. 生成 JSON 文件
 echo "正在生成订阅与节点文件..."
 BEST_IP=$(head -n 1 result/ip.txt || echo "104.16.1.1")
 
